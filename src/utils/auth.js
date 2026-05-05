@@ -15,6 +15,7 @@ export const SCOPES = [
   'user-top-read',
   'user-read-recently-played',
   'user-read-playback-state',
+      'user-read-private',
 ].join(' ');
 
 // Generate a random code verifier (used in PKCE flow)
