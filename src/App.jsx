@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSpotify } from './hooks/useSpotify';
 import Login from './components/Login';
@@ -6,8 +6,11 @@ import TopTracks from './components/TopTracks';
 import TopArtists from './components/TopArtists';
 import Personality from './components/Personality';
 import RecentlyPlayed from './components/RecentlyPlayed';
+import GenreExplorer from './components/GenreExplorer';
+import ArtistDetailModal from './components/ArtistDetailModal';
+import GenreDiscoveryPanel from './components/GenreDiscoveryPanel';
 
-const SECTIONS = ['top-tracks', 'top-artists', 'recent', 'personality'];
+const SECTIONS = ['top-tracks', 'top-artists', 'genre', 'recent', 'personality'];
 
 function Header({ onLogout }) {
   return (
@@ -24,9 +27,7 @@ function Header({ onLogout }) {
         </div>
         <h1 className="text-xl font-bold text-white">Spotify Visualizer</h1>
       </div>
-      <button onClick={onLogout} className="text-textSubtle hover:text-white transition-colors">
-        Logout
-      </button>
+      <button onClick={onLogout} className="text-textSubtle hover:text-white transition-colors">Logout</button>
     </motion.header>
   );
 }
@@ -61,7 +62,9 @@ function App() {
   const [currentSection, setCurrentSection] = useState(0);
   const [timeRange, setTimeRange] = useState('medium');
   const [anchorTime, setAnchorTime] = useState(Date.now());
-  const { getTopTracks, getTopArtists, getRecentlyPlayed, loading } = useSpotify();
+  const [selectedArtist, setSelectedArtist] = useState(null);
+  const [selectedGenre, setSelectedGenre] = useState(null);
+  const spotify = useSpotify();
 
   const [data, setData] = useState({
     tracks: [],
@@ -69,17 +72,17 @@ function App() {
     recentlyPlayed: [],
     audioFeatures: [],
   });
+  const [artistsByRange, setArtistsByRange] = useState({
+    short: null,
+    medium: null,
+    long: null,
+  });
 
   useEffect(() => {
     const token = localStorage.getItem('spotify_access_token');
     if (token) {
       setIsAuthenticated(true);
       setCurrentSection(0);
-    } else {
-      const code = new URLSearchParams(window.location.search).get('code');
-      if (code && !token) {
-        handleAuth(code);
-      }
     }
   }, []);
 
@@ -138,12 +141,12 @@ function App() {
     if (!isAuthenticated) return;
     const fetchData = async () => {
       const [tracks, artists, recent] = await Promise.all([
-        getTopTracks(timeRange),
-        getTopArtists(timeRange),
-        getRecentlyPlayed(),
+        spotify.getTopTracks(timeRange),
+        spotify.getTopArtists(timeRange),
+        spotify.getRecentlyPlayed(),
       ]);
       const trackIds = tracks?.items?.map((t) => t.id) || [];
-      const features = await getAudioFeatures(trackIds);
+      const features = await spotify.getAudioFeatures(trackIds);
       setData({
         tracks: tracks?.items || [],
         artists: artists?.items || [],
@@ -151,41 +154,45 @@ function App() {
         audioFeatures: features || [],
       });
     };
+    const fetchAllArtists = async () => {
+      const results = {};
+      for (const r of ['short', 'medium', 'long']) {
+        results[r] = await spotify.getTopArtists(r);
+      }
+      setArtistsByRange(results);
+    };
     fetchData();
+    fetchAllArtists();
   }, [isAuthenticated, anchorTime, timeRange]);
 
-  const sections = {
-    'top-tracks': (
-      <TopTracks tracks={data.tracks} loading={loading} />
-    ),
+  const sections = useMemo(() => ({
+    'top-tracks': <TopTracks tracks={data.tracks} loading={false} />,
     'top-artists': (
-      <TopArtists artists={data.artists} loading={loading} />
+      <TopArtists artists={data.artists} loading={false} onArtistClick={setSelectedArtist} />
     ),
-    recent: (
-      <RecentlyPlayed items={data.recentlyPlayed} loading={loading} />
+    genre: (
+      <GenreExplorer artistsByRange={artistsByRange} onGenreClick={setSelectedGenre} />
     ),
+    recent: <RecentlyPlayed items={data.recentlyPlayed} loading={false} />,
     personality: (
-      <Personality tracks={data.tracks} audioFeatures={data.audioFeatures} loading={loading} />
+      <Personality tracks={data.tracks} audioFeatures={data.audioFeatures} loading={false} />
     ),
-  };
+  }), [data, artistsByRange]);
 
   if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-background">        <Login />
-      </div>
-    );
+    return <div className="min-h-screen bg-background"><Login /></div>;
   }
 
   return (
     <div className="min-h-screen bg-background">
       <Header onLogout={handleLogout} />
-
       <div className="max-w-6xl mx-auto px-4 py-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="text-center mb-8"
-        >          <h2 className="text-4xl md:text-5xl font-bold text-white mb-2">
+        >
+          <h2 className="text-4xl md:text-5xl font-bold text-white mb-2">
             Your {timeRange === 'short' ? 'Last 4 Weeks' : timeRange === 'medium' ? 'Last 6 Months' : 'All Time'} on Spotify
           </h2>
           <p className="text-textSubtle">Scroll through your personalized music insights</p>
@@ -231,14 +238,29 @@ function App() {
               key={section}
               onClick={() => setCurrentSection(idx)}
               className={`w-3 h-3 rounded-full transition-all ${
-                idx === currentSection
-                  ? 'bg-spotify w-8'
-                  : 'bg-textSubtle/30 hover:bg-textSubtle/50'
+                idx === currentSection ? 'bg-spotify w-8' : 'bg-textSubtle/30 hover:bg-textSubtle/50'
               }`}
             />
           ))}
         </div>
       </div>
+
+      {selectedArtist && (
+        <ArtistDetailModal
+          artist={selectedArtist}
+          onClose={() => setSelectedArtist(null)}
+          onArtistClick={setSelectedArtist}
+          spotify={spotify}
+        />
+      )}
+
+      {selectedGenre && (
+        <GenreDiscoveryPanel
+          genre={selectedGenre}
+          onClose={() => setSelectedGenre(null)}
+          spotify={spotify}
+        />
+      )}
     </div>
   );
 }
